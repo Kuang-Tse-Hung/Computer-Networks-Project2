@@ -20,6 +20,8 @@
 typedef struct {
     Packet *packets[WINDOW_SIZE];
     uint32_t base_seq_num;
+    uint32_t last_ack_seq_num;
+    uint32_t largest_seq_num;
 } ReceiverWindow;
 
 int main(int argc, char *argv[]) {
@@ -133,20 +135,52 @@ int main(int argc, char *argv[]) {
                 int index = seq_num % WINDOW_SIZE;
 
                 if (window.packets[index] == NULL) {
+                    // update the largest seq_num of the window where there is a packet received
+                    window.largest_seq_num = seq_num > window.largest_seq_num ? seq_num : window.largest_seq_num;
                     // Store the packet
                     window.packets[index] = malloc(sizeof(Packet));
                     memcpy(window.packets[index], &packet, sizeof(Packet));
 
                     // Send ACK
+                    // for the last consecutive packet received
+
+                    // Decide what ack to be sent
+                    // If we received all consecutive seq_num before the current one, that means:
+                    // 1. the current one is the last one, send the ack and update the last ack seqnum
+                    // 2. the seqnum is one of the missing ones in window[base_seq_num: largest_seq_num]
+                    int ack_num;
+                    if (seq_num == window.last_ack_seq_num + 1) {
+                        if (window.largest_seq_num == seq_num) {
+                            window.last_ack_seq_num = seq_num;
+
+                            ack_num = seq_num + 1;
+                        }
+                        else {
+                            uint32_t i = seq_num + 1;
+                            // search for an index where missing or until the largest_index
+                            while (i <= window.largest_seq_num && window.packets[i % WINDOW_SIZE] != NULL) {
+                                i++;
+                            }
+
+                            ack_num = window.packets[(i-1) % WINDOW_SIZE]->header.seq_num + 1;
+                        }
+                        
+                    }
+                    // otherwise, some packets are missing in between, send the last ack seqnum
+                    else {
+                        ack_num = window.last_ack_seq_num + 1;
+                    }
+
+                    // send the ack
                     Packet ack_packet;
                     memset(&ack_packet, 0, sizeof(ack_packet));
                     ack_packet.header.type = PACKET_TYPE_ACK;
-                    ack_packet.header.ack_num = seq_num + 1;
+                    ack_packet.header.ack_num = ack_num;
                     ack_packet.header.checksum = compute_checksum(&ack_packet);
 
                     serialize_packet(&ack_packet, buffer);
                     sendto(sockfd, buffer, HEADER_SIZE, 0,
-                           (struct sockaddr *)&sender_addr, addr_len);
+                        (struct sockaddr *)&sender_addr, addr_len);
 
                     // Slide window and write data
                     while (window.packets[window.base_seq_num % WINDOW_SIZE]) {

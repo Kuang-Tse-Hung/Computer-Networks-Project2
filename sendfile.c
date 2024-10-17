@@ -18,7 +18,7 @@
 typedef struct {
     Packet *packets[WINDOW_SIZE];
     struct timeval time_sent[WINDOW_SIZE];
-    int acked[WINDOW_SIZE];
+    // int acked[WINDOW_SIZE];
     uint32_t base_seq_num;
     uint32_t next_seq_num;
 } SenderWindow;
@@ -159,7 +159,7 @@ int main(int argc, char *argv[]) {
             // Store packet in window
             int index = packet->header.seq_num % WINDOW_SIZE;
             window.packets[index] = packet;
-            window.acked[index] = 0;
+            // window.acked[index] = 0;
             gettimeofday(&window.time_sent[index], NULL);
 
             // Send packet
@@ -185,7 +185,7 @@ int main(int argc, char *argv[]) {
                         if (window.packets[index]) {
                             free(window.packets[index]);
                             window.packets[index] = NULL;
-                            window.acked[index] = 1;
+                            // window.acked[index] = 1;
                         }
                     }
                     window.base_seq_num = ack_num;
@@ -196,22 +196,37 @@ int main(int argc, char *argv[]) {
         // Check for timeouts and retransmit if necessary
         struct timeval now;
         gettimeofday(&now, NULL);
-        for (uint32_t i = window.base_seq_num; i < window.next_seq_num; i++) {
-            int index = i % WINDOW_SIZE;
-            if (window.packets[index] && !window.acked[index]) {
-                long elapsed = (now.tv_sec - window.time_sent[index].tv_sec);
-                if (elapsed >= TIMEOUT_SEC) {
-                    // Retransmit packet
-                    Packet *packet = window.packets[index];
-                    packet->header.checksum = compute_checksum(packet);
-                    serialize_packet(packet, buffer);
-                    sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
-                           (struct sockaddr *)&recv_addr, addr_len);
-                    gettimeofday(&window.time_sent[index], NULL);
-                    printf("[resend data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
-                }
-            }
+        // only retransmit the current missing packet
+        uint32_t i = window.base_seq_num;
+        int index = i % WINDOW_SIZE;
+        long elapsed = (now.tv_sec - window.time_sent[index].tv_sec);
+        if (elapsed >= TIMEOUT_SEC) {
+            // Retransmit packet
+            Packet *packet = window.packets[index];
+            packet->header.checksum = compute_checksum(packet);
+            serialize_packet(packet, buffer);
+            sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
+                    (struct sockaddr *)&recv_addr, addr_len);
+            gettimeofday(&window.time_sent[index], NULL);
+            printf("[resend data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
         }
+
+        // for (uint32_t i = window.base_seq_num; i < window.next_seq_num; i++) {
+        //     int index = i % WINDOW_SIZE;
+        //     if (window.packets[index] && !window.acked[index]) {
+        //         long elapsed = (now.tv_sec - window.time_sent[index].tv_sec);
+        //         if (elapsed >= TIMEOUT_SEC) {
+        //             // Retransmit packet
+        //             Packet *packet = window.packets[index];
+        //             packet->header.checksum = compute_checksum(packet);
+        //             serialize_packet(packet, buffer);
+        //             sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
+        //                    (struct sockaddr *)&recv_addr, addr_len);
+        //             gettimeofday(&window.time_sent[index], NULL);
+        //             printf("[resend data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
+        //         }
+        //     }
+        // }
     }
 
     // Send end packet
