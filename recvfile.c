@@ -1,3 +1,4 @@
+// recvfile.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,18 +6,12 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <netinet/in.h>
 #include "packet.h"
 
-
 #define MAX_PACKET_SIZE (13 + MAX_PAYLOAD_SIZE)
-#define WINDOW_SIZE 10  // Adjust as needed
-#define BUFFER_SIZE 1024 * 1024  // 1 MB
+#define WINDOW_SIZE 10
 
-// Include Packet structure and utility functions here
-
-// Buffer to store received packets
 typedef struct {
     Packet *packets[WINDOW_SIZE];
     uint32_t base_seq_num;
@@ -46,7 +41,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // Bind to the specified port
+    // Bind the socket to the specified port
     memset(&recv_addr, 0, sizeof(recv_addr));
     recv_addr.sin_family = AF_INET;
     recv_addr.sin_addr.s_addr = INADDR_ANY;
@@ -58,19 +53,19 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // Initialize receiver window
+    // Initialize the receiver window
     ReceiverWindow window;
     memset(&window, 0, sizeof(window));
-    window.base_seq_num = 0;
+    window.base_seq_num = 0;  // Will update after START packet
 
     FILE *fp = NULL;
     char filename[256] = {0};
     int expecting_start_packet = 1;
-    int expecting_end_packet = 0;
 
     printf("Receiver started, waiting for sender...\n");
 
     while (1) {
+        // Receive a packet from the sender
         num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                              (struct sockaddr *)&sender_addr, &addr_len);
         if (num_bytes < 0) {
@@ -90,9 +85,8 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        // Process packet based on type
+        // Handle START packet
         if (packet.header.type == PACKET_TYPE_START && expecting_start_packet) {
-            // Extract filename from payload
             strncpy(filename, (char *)packet.payload, packet.header.length);
             strcat(filename, ".recv");
             fp = fopen(filename, "wb");
@@ -103,76 +97,94 @@ int main(int argc, char *argv[]) {
             expecting_start_packet = 0;
             printf("[recv start packet] Filename: %s\n", filename);
 
-            // Send ACK for start packet
-            Packet ack_packet;
-            memset(&ack_packet, 0, sizeof(ack_packet));
+            // Set base sequence number to the next expected sequence number
+            window.base_seq_num = packet.header.seq_num + 1;
+            printf("[update base_seq_num] base_seq_num: %u\n", window.base_seq_num);
+
+            // Send ACK for the start packet
+            Packet ack_packet = {0};
             ack_packet.header.type = PACKET_TYPE_ACK;
-            ack_packet.header.ack_num = packet.header.seq_num + 1;
+            ack_packet.header.ack_num = window.base_seq_num;
             ack_packet.header.checksum = compute_checksum(&ack_packet);
 
             serialize_packet(&ack_packet, buffer);
-            sendto(sockfd, buffer, HEADER_SIZE, 0,
-                   (struct sockaddr *)&sender_addr, addr_len);
+            sendto(sockfd, buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
+            printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
             continue;
         }
 
+        // Ignore packets if we haven't received the start packet yet
         if (expecting_start_packet) {
-            // Ignore packets until we receive the start packet
             continue;
         }
 
+        // Handle DATA packets
         if (packet.header.type == PACKET_TYPE_DATA) {
             uint32_t seq_num = packet.header.seq_num;
             printf("[recv data] Seq: %u Length: %u\n", seq_num, packet.header.length);
 
-            // Check if packet is within the window
-            if (seq_num >= window.base_seq_num &&
-                seq_num < window.base_seq_num + WINDOW_SIZE) {
+            int index = seq_num - window.base_seq_num;
+            printf("[debug] base_seq_num: %u, seq_num: %u, index: %d\n",
+                   window.base_seq_num, seq_num, index);
 
-                // Calculate index in window buffer
-                int index = seq_num % WINDOW_SIZE;
+            if (index >= 0 && index < WINDOW_SIZE) {
+                // Send ACK
+                Packet ack_packet = {0};
+                ack_packet.header.type = PACKET_TYPE_ACK;
+                ack_packet.header.ack_num = seq_num + 1;
+                ack_packet.header.checksum = compute_checksum(&ack_packet);
 
+                serialize_packet(&ack_packet, buffer);
+                sendto(sockfd, buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
+                printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
+
+                // If the packet hasn't been received before, store it
                 if (window.packets[index] == NULL) {
-                    // Store the packet
                     window.packets[index] = malloc(sizeof(Packet));
                     memcpy(window.packets[index], &packet, sizeof(Packet));
-
-                    // Send ACK
-                    Packet ack_packet;
-                    memset(&ack_packet, 0, sizeof(ack_packet));
-                    ack_packet.header.type = PACKET_TYPE_ACK;
-                    ack_packet.header.ack_num = seq_num + 1;
-                    ack_packet.header.checksum = compute_checksum(&ack_packet);
-
-                    serialize_packet(&ack_packet, buffer);
-                    sendto(sockfd, buffer, HEADER_SIZE, 0,
-                           (struct sockaddr *)&sender_addr, addr_len);
-
-                    // Slide window and write data
-                    while (window.packets[window.base_seq_num % WINDOW_SIZE]) {
-                        Packet *p = window.packets[window.base_seq_num % WINDOW_SIZE];
-                        fwrite(p->payload, 1, p->header.length, fp);
-                        free(p);
-                        window.packets[window.base_seq_num % WINDOW_SIZE] = NULL;
-                        window.base_seq_num++;
-                    }
                 }
+
+                // Slide the window and write data to the file
+                while (window.packets[0]) {
+                    Packet *p = window.packets[0];
+                    fwrite(p->payload, 1, p->header.length, fp);
+                    free(p);
+
+                    // Shift packets in the window
+                    memmove(&window.packets[0], &window.packets[1], sizeof(Packet *) * (WINDOW_SIZE - 1));
+                    window.packets[WINDOW_SIZE - 1] = NULL;
+                    window.base_seq_num++;
+                    printf("[slide window] new base_seq_num: %u\n", window.base_seq_num);
+                }
+            } else if (seq_num < window.base_seq_num) {
+                // Packet already received; send duplicate ACK
+                Packet ack_packet = {0};
+                ack_packet.header.type = PACKET_TYPE_ACK;
+                ack_packet.header.ack_num = window.base_seq_num;
+                ack_packet.header.checksum = compute_checksum(&ack_packet);
+
+                serialize_packet(&ack_packet, buffer);
+                sendto(sockfd, buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
+                printf("[send ack] Ack Num: %u (duplicate)\n", ack_packet.header.ack_num);
+            } else {
+                // Packet is ahead of the window; ignore
+                printf("[ignore packet] Seq: %u is outside the window\n", seq_num);
             }
-        } else if (packet.header.type == PACKET_TYPE_END) {
-            expecting_end_packet = 1;
+        }
+
+        // Handle END packet
+        if (packet.header.type == PACKET_TYPE_END) {
             printf("[recv end packet]\n");
 
-            // Send ACK for end packet
-            Packet ack_packet;
-            memset(&ack_packet, 0, sizeof(ack_packet));
+            // Send ACK for the END packet
+            Packet ack_packet = {0};
             ack_packet.header.type = PACKET_TYPE_ACK;
             ack_packet.header.ack_num = packet.header.seq_num + 1;
             ack_packet.header.checksum = compute_checksum(&ack_packet);
 
             serialize_packet(&ack_packet, buffer);
-            sendto(sockfd, buffer, HEADER_SIZE, 0,
-                   (struct sockaddr *)&sender_addr, addr_len);
-
+            sendto(sockfd, buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
+            printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
             break;
         }
     }
