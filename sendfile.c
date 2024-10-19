@@ -55,7 +55,7 @@ int main(int argc, char *argv[]) {
     int file_fd = open(file_path, O_RDONLY);
     if (file_fd < 0) {
         fprintf(stderr, "Failed to open file: %s\n", file_path);
-        perror("Error");
+        perror("Failed to open file");
         exit(EXIT_FAILURE);
     }
 
