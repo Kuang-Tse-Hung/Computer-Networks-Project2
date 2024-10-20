@@ -7,7 +7,7 @@
 #include <string.h>
 
 #define MAX_PAYLOAD_SIZE 1024  // Adjust as needed for MTU considerations
-#define HEADER_SIZE 13         // Size of PacketHeader when serialized
+#define HEADER_SIZE 14         // Size of PacketHeader when serialized
 
 typedef enum {
     PACKET_TYPE_DATA,
@@ -19,6 +19,7 @@ typedef enum {
 typedef struct {
     uint32_t seq_num;    // Sequence number
     uint32_t ack_num;    // Acknowledgment number
+    uint8_t retrans;         // is this a retransmitted packet, used for RRT calculation
     uint16_t checksum;   // Checksum for error detection
     uint16_t length;     // Length of the payload
     uint8_t type;        // PacketType

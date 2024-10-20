@@ -19,7 +19,6 @@
 typedef struct {
     Packet *packets[WINDOW_SIZE];
     struct timeval time_sent[WINDOW_SIZE];
-    // int acked[WINDOW_SIZE];
     uint32_t base_seq_num;
     uint32_t next_seq_num;
 } SenderWindow;
@@ -90,13 +89,34 @@ int main(int argc, char *argv[]) {
     timeout.tv_usec = 0;  // Non-blocking
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
+    // Dynamic calculation of the Retransmission Time Out (RTO)
+    // Based on real-time RTT
+    // Update every time receiving an ACK of a non-retransmitted packet
+    // The time is measured in ms
+    // Define the initial values and the update factors
+    // Update Formula: 
+    // SRTT_i = alpha * SRTT_i-1 + (1 - alpha) * RTT_i
+    // RTTVAR_i = (1 - beta) * RTTVAR_i-1 + beta * |SRTT_i - RTT_i|
+    // RTO_i = SRTT_i + 4 * RTTVAR_i
+    long SRTT = 0;          // smoothed rtt
+    long RTTVAR = 0.75;     // rtt variation
+    long RTO = TIMEOUT_SEC * 1000000;  // initial rto
+    long alpha = 0.125;     // SRTT update factor
+    long beta = 0.25;       // RTTVAR update factor
+
     // Send start packet with filename
     Packet start_packet = {0};
     start_packet.header.seq_num = window.next_seq_num++;
     start_packet.header.type = PACKET_TYPE_START;
     start_packet.header.length = strlen(file_path);
     memcpy(start_packet.payload, file_path, start_packet.header.length);
+    start_packet.header.retrans = 0;
     start_packet.header.checksum = compute_checksum(&start_packet);
+
+    // Store the start packet in window
+    int index = start_packet.header.seq_num % WINDOW_SIZE;  // Use modulo for circular buffer
+    window.packets[index] = &start_packet;
+    gettimeofday(&window.time_sent[index], NULL);
 
     serialize_packet(&start_packet, buffer);
     sendto(sockfd, buffer, HEADER_SIZE + start_packet.header.length, 0,
@@ -123,6 +143,18 @@ int main(int argc, char *argv[]) {
             if (ack_packet.header.type == PACKET_TYPE_ACK &&
                 ack_packet.header.ack_num == start_packet.header.seq_num + 1) {
                 printf("[recv ack] Ack Num: %u\n", ack_packet.header.ack_num);
+
+                // Update rto if it is not the ack for the retransmitted start packet
+                if (!ack_packet.header.retrans) {
+                    struct timeval now;
+                    gettimeofday(&now, NULL);
+                    struct timeval sent = window.time_sent[index];
+                    double RTT = (now.tv_sec - sent.tv_sec) * 1000000 + (now.tv_usec - sent.tv_usec);
+                    SRTT = RTT;
+                    RTTVAR = RTT / 2;
+                    RTO = SRTT + 4 * RTTVAR;
+                }
+
                 // Update base_seq_num
                 window.base_seq_num = ack_packet.header.ack_num;
                 printf("[update base_seq_num] base_seq_num: %u\n", window.base_seq_num);
@@ -130,7 +162,12 @@ int main(int argc, char *argv[]) {
             }
         } else {
             // Timeout, retransmit start packet
-            usleep(TIMEOUT_SEC * 1000000);
+            usleep(RTO);
+
+            start_packet.header.retrans = 1;
+            start_packet.header.checksum = compute_checksum(&start_packet);
+            serialize_packet(&start_packet, buffer);
+
             sendto(sockfd, buffer, HEADER_SIZE + start_packet.header.length, 0,
                    (struct sockaddr *)&recv_addr, addr_len);
             printf("[resend start packet] Seq: %u\n", start_packet.header.seq_num);
@@ -146,6 +183,7 @@ int main(int argc, char *argv[]) {
             memset(packet, 0, sizeof(Packet));
             packet->header.seq_num = window.next_seq_num++;
             packet->header.type = PACKET_TYPE_DATA;
+            packet->header.retrans = 0;
 
             // Read data from file
             packet->header.length = read(file_fd, packet->payload, MAX_PAYLOAD_SIZE);
@@ -167,7 +205,6 @@ int main(int argc, char *argv[]) {
             // Store packet in window
             int index = packet->header.seq_num % WINDOW_SIZE;  // Use modulo for circular buffer
             window.packets[index] = packet;
-            // window.acked[index] = 0;
             gettimeofday(&window.time_sent[index], NULL);
 
             // Send packet
@@ -215,10 +252,32 @@ int main(int argc, char *argv[]) {
                     window.base_seq_num = ack_num;  // Slide the window
                     printf("[slide window] new base_seq_num: %u\n", window.base_seq_num);
                 }
+
+                // Dynamically update the RTO
+                // but the retransmitted packets are not included in the update process
+                if (!ack_packet.header.retrans) {
+                    struct timeval now;
+                    gettimeofday(&now, NULL);
+                    struct timeval sent = window.time_sent[index];
+                    long RTT = (now.tv_sec - sent.tv_sec) * 1000000 + (now.tv_usec - sent.tv_usec);
+
+                    if (SRTT == 0) {
+                        // SRTT hasn't updated yet
+                        SRTT = RTT;
+                        RTTVAR = RTT / 2;
+                    } 
+                    else {
+                        // smooth update
+                        RTTVAR = (1 - beta) * RTTVAR + beta * fabs(SRTT - RTT);
+                        SRTT = (1 - alpha) * SRTT + alpha * RTT;
+                    }
+
+                    RTO = SRTT + 4 * RTTVAR;
+                }
             }
         }
 
-        // Check for timeouts and retransmit if necessary
+        // Check for rto and retransmit if necessary
         struct timeval now;
         gettimeofday(&now, NULL);
         // only retransmit the current missing packet
@@ -226,9 +285,10 @@ int main(int argc, char *argv[]) {
         int index = i % WINDOW_SIZE;
         long elapsed = (now.tv_sec - window.time_sent[index].tv_sec) * 1000000 +
                                (now.tv_usec - window.time_sent[index].tv_usec);
-        if (elapsed >= TIMEOUT_SEC * 1000000) {
+        if (elapsed >= RTO) {
             // Retransmit packet
             Packet *packet = window.packets[index];
+            packet->header.retrans = 1;
             packet->header.checksum = compute_checksum(packet);
             serialize_packet(packet, buffer);
             sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
@@ -242,6 +302,7 @@ int main(int argc, char *argv[]) {
     Packet end_packet = {0};
     end_packet.header.seq_num = window.next_seq_num++;
     end_packet.header.type = PACKET_TYPE_END;
+    end_packet.header.retrans = 0;
     end_packet.header.checksum = compute_checksum(&end_packet);
 
     serialize_packet(&end_packet, buffer);
@@ -250,8 +311,8 @@ int main(int argc, char *argv[]) {
     printf("[send end packet] Seq: %u\n", end_packet.header.seq_num);
 
     // Set socket timeout before waiting for ACK
-    timeout.tv_sec = TIMEOUT_SEC;  // e.g., 1 second
-    timeout.tv_usec = 0;
+    timeout.tv_sec = RTO * 1000000;  // e.g., 1 second
+    timeout.tv_usec = RTO % 1000000;
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
     // Wait for ACK of end packet
@@ -268,6 +329,9 @@ int main(int argc, char *argv[]) {
             }
         } else {
             // Timeout occurred, retransmit end packet
+            end_packet.header.retrans = 0;
+            end_packet.header.checksum = compute_checksum(&end_packet);
+            serialize_packet(&end_packet, buffer);
             sendto(sockfd, buffer, HEADER_SIZE, 0,
                    (struct sockaddr *)&recv_addr, addr_len);
             printf("[resend end packet] Seq: %u\n", end_packet.header.seq_num);
