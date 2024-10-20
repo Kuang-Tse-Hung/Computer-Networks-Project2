@@ -116,6 +116,16 @@ int main(int argc, char *argv[]) {
         if (num_bytes > 0) {
             Packet ack_packet;
             deserialize_packet(buffer, &ack_packet);
+
+            // Verify checksum
+            uint16_t received_checksum = ack_packet.header.checksum;
+            ack_packet.header.checksum = 0;
+            uint16_t computed_checksum = compute_checksum(&ack_packet);
+            if (received_checksum != computed_checksum) {
+                printf("[recv corrupt ack packet]\n");
+                continue;
+            }
+
             if (ack_packet.header.type == PACKET_TYPE_ACK &&
                 ack_packet.header.ack_num == start_packet.header.seq_num + 1) {
                 printf("[recv ack] Ack Num: %u\n", ack_packet.header.ack_num);
@@ -174,6 +184,16 @@ int main(int argc, char *argv[]) {
                                      (struct sockaddr *)&recv_addr, &addr_len)) > 0) {
             Packet ack_packet;
             deserialize_packet(buffer, &ack_packet);
+
+            // Verify checksum
+            uint16_t received_checksum = ack_packet.header.checksum;
+            ack_packet.header.checksum = 0;
+            uint16_t computed_checksum = compute_checksum(&ack_packet);
+            if (received_checksum != computed_checksum) {
+                printf("[recv corrupt ack packet]\n");
+                continue;
+            }
+
             if (ack_packet.header.type == PACKET_TYPE_ACK) {
                 uint32_t ack_num = ack_packet.header.ack_num;
                 printf("[recv ack] Ack Num: %u\n", ack_num);
