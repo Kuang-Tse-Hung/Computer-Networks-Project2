@@ -1,4 +1,5 @@
 // sendfile.c
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,7 +84,7 @@ int main(int argc, char *argv[]) {
     window.base_seq_num = 0;  // Will update after START packet
     window.next_seq_num = 0;
 
-    // Set socket timeout for recvfrom
+    // Set socket timeout for recvfrom (non-blocking)
     struct timeval timeout;
     timeout.tv_sec = 0;
     timeout.tv_usec = 0;  // Non-blocking
@@ -154,12 +155,7 @@ int main(int argc, char *argv[]) {
             packet->header.checksum = compute_checksum(packet);
 
             // Store packet in window
-            int index = packet->header.seq_num - window.base_seq_num;
-            if (index >= WINDOW_SIZE) {
-                fprintf(stderr, "[error] Index out of window range\n");
-                free(packet);
-                break;
-            }
+            int index = packet->header.seq_num % WINDOW_SIZE;  // Use modulo for circular buffer
             window.packets[index] = packet;
             window.acked[index] = 0;
             gettimeofday(&window.time_sent[index], NULL);
@@ -189,8 +185,8 @@ int main(int argc, char *argv[]) {
                 if (ack_num > window.base_seq_num) {
                     // Mark packets as acknowledged
                     for (uint32_t i = window.base_seq_num; i < ack_num; i++) {
-                        int index = i - window.base_seq_num;
-                        if (index >= 0 && index < WINDOW_SIZE && window.packets[index]) {
+                        int index = i % WINDOW_SIZE;  // Use modulo for circular buffer
+                        if (window.packets[index]) {
                             free(window.packets[index]);
                             window.packets[index] = NULL;
                             window.acked[index] = 1;
@@ -206,8 +202,8 @@ int main(int argc, char *argv[]) {
         struct timeval now;
         gettimeofday(&now, NULL);
         for (uint32_t i = window.base_seq_num; i < window.next_seq_num; i++) {
-            int index = i - window.base_seq_num;
-            if (index >= 0 && index < WINDOW_SIZE && window.packets[index] && !window.acked[index]) {
+            int index = i % WINDOW_SIZE;
+            if (window.packets[index] && !window.acked[index]) {
                 long elapsed = (now.tv_sec - window.time_sent[index].tv_sec) * 1000000 +
                                (now.tv_usec - window.time_sent[index].tv_usec);
                 if (elapsed >= TIMEOUT_SEC * 1000000) {
@@ -235,6 +231,11 @@ int main(int argc, char *argv[]) {
            (struct sockaddr *)&recv_addr, addr_len);
     printf("[send end packet] Seq: %u\n", end_packet.header.seq_num);
 
+    // Set socket timeout before waiting for ACK
+    timeout.tv_sec = TIMEOUT_SEC;  // e.g., 1 second
+    timeout.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
     // Wait for ACK of end packet
     while (1) {
         num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
@@ -248,8 +249,7 @@ int main(int argc, char *argv[]) {
                 break;
             }
         } else {
-            // Timeout, retransmit end packet
-            usleep(TIMEOUT_SEC * 1000000);
+            // Timeout occurred, retransmit end packet
             sendto(sockfd, buffer, HEADER_SIZE, 0,
                    (struct sockaddr *)&recv_addr, addr_len);
             printf("[resend end packet] Seq: %u\n", end_packet.header.seq_num);

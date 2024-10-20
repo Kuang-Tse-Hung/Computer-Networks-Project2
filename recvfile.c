@@ -1,4 +1,5 @@
 // recvfile.c
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,6 +89,7 @@ int main(int argc, char *argv[]) {
         // Handle START packet
         if (packet.header.type == PACKET_TYPE_START && expecting_start_packet) {
             strncpy(filename, (char *)packet.payload, packet.header.length);
+            filename[packet.header.length] = '\0';  // Ensure null-termination
             strcat(filename, ".recv");
             fp = fopen(filename, "wb");
             if (!fp) {
@@ -123,52 +125,40 @@ int main(int argc, char *argv[]) {
             uint32_t seq_num = packet.header.seq_num;
             printf("[recv data] Seq: %u Length: %u\n", seq_num, packet.header.length);
 
-            int index = seq_num - window.base_seq_num;
+            // Calculate the index using modulo arithmetic for circular buffer
+            int index = seq_num % WINDOW_SIZE;
             printf("[debug] base_seq_num: %u, seq_num: %u, index: %d\n",
                    window.base_seq_num, seq_num, index);
 
-            if (index >= 0 && index < WINDOW_SIZE) {
-                // Send ACK
-                Packet ack_packet = {0};
-                ack_packet.header.type = PACKET_TYPE_ACK;
-                ack_packet.header.ack_num = seq_num + 1;
-                ack_packet.header.checksum = compute_checksum(&ack_packet);
+            // Send ACK for the received packet
+            Packet ack_packet = {0};
+            ack_packet.header.type = PACKET_TYPE_ACK;
+            ack_packet.header.ack_num = seq_num + 1;
+            ack_packet.header.checksum = compute_checksum(&ack_packet);
 
-                serialize_packet(&ack_packet, buffer);
-                sendto(sockfd, buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
-                printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
+            serialize_packet(&ack_packet, buffer);
+            sendto(sockfd, buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
+            printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
 
-                // If the packet hasn't been received before, store it
+            // Check if the packet is within the window
+            if (seq_num >= window.base_seq_num && seq_num < window.base_seq_num + WINDOW_SIZE) {
+                // Store the packet if it hasn't been received before
                 if (window.packets[index] == NULL) {
                     window.packets[index] = malloc(sizeof(Packet));
                     memcpy(window.packets[index], &packet, sizeof(Packet));
                 }
 
-                // Slide the window and write data to the file
-                while (window.packets[0]) {
-                    Packet *p = window.packets[0];
+                // Deliver all in-order packets
+                while (window.packets[window.base_seq_num % WINDOW_SIZE]) {
+                    Packet *p = window.packets[window.base_seq_num % WINDOW_SIZE];
                     fwrite(p->payload, 1, p->header.length, fp);
                     free(p);
-
-                    // Shift packets in the window
-                    memmove(&window.packets[0], &window.packets[1], sizeof(Packet *) * (WINDOW_SIZE - 1));
-                    window.packets[WINDOW_SIZE - 1] = NULL;
+                    window.packets[window.base_seq_num % WINDOW_SIZE] = NULL;
                     window.base_seq_num++;
                     printf("[slide window] new base_seq_num: %u\n", window.base_seq_num);
                 }
-            } else if (seq_num < window.base_seq_num) {
-                // Packet already received; send duplicate ACK
-                Packet ack_packet = {0};
-                ack_packet.header.type = PACKET_TYPE_ACK;
-                ack_packet.header.ack_num = window.base_seq_num;
-                ack_packet.header.checksum = compute_checksum(&ack_packet);
-
-                serialize_packet(&ack_packet, buffer);
-                sendto(sockfd, buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
-                printf("[send ack] Ack Num: %u (duplicate)\n", ack_packet.header.ack_num);
             } else {
-                // Packet is ahead of the window; ignore
-                printf("[ignore packet] Seq: %u is outside the window\n", seq_num);
+                printf("[packet outside window] Seq: %u\n", seq_num);
             }
         }
 
