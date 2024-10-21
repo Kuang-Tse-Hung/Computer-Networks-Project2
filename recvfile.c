@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -61,6 +62,8 @@ int main(int argc, char *argv[]) {
 
     FILE *fp = NULL;
     char filename[256] = {0};
+    char subdir[100];
+    struct stat st = {0};
     int expecting_start_packet = 1;
 
     printf("Receiver started, waiting for sender...\n");
@@ -90,6 +93,18 @@ int main(int argc, char *argv[]) {
         if (packet.header.type == PACKET_TYPE_START && expecting_start_packet) {
             strncpy(filename, (char *)packet.payload, packet.header.length);
             filename[packet.header.length] = '\0';  // Ensure null-termination
+
+            // check subdir
+            strncpy(subdir, filename, strrchr(filename, '/') - filename);
+            subdir[strrchr(filename, '/') - filename] = '\0';
+            if (stat(subdir, &st) == -1) {
+                if (mkdir(subdir, 0700) != 0) {
+                    perror("Failed to create directory");
+                    exit(EXIT_FAILURE);
+                }
+                printf("Directory created: %s\n", subdir);
+            }
+            
             strcat(filename, ".recv");
             fp = fopen(filename, "wb");
             if (!fp) {
