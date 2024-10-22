@@ -10,7 +10,7 @@
 #include <netinet/in.h>
 #include "packet.h"
 
-#define MAX_PACKET_SIZE (13 + MAX_PAYLOAD_SIZE)
+#define MAX_PACKET_SIZE (HEADER_SIZE + MAX_PAYLOAD_SIZE)
 #define WINDOW_SIZE 10
 
 typedef struct {
