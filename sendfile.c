@@ -12,7 +12,7 @@
 #include <fcntl.h>
 #include "packet.h"
 
-#define MAX_PACKET_SIZE (HEADER_SIZE + MAX_PAYLOAD_SIZE)
+#define MAX_PACKET_SIZE (13 + MAX_PAYLOAD_SIZE)
 #define WINDOW_SIZE 10
 #define TIMEOUT_SEC 1  // Timeout in seconds
 
@@ -165,7 +165,6 @@ int main(int argc, char *argv[]) {
             usleep(RTO);
 
             start_packet.header.retrans = 1;
-            start_packet.header.checksum = 0;
             start_packet.header.checksum = compute_checksum(&start_packet);
             serialize_packet(&start_packet, buffer);
 
