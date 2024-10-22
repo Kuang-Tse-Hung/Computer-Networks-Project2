@@ -81,7 +81,6 @@ int main(int argc, char *argv[]) {
 
         // Verify checksum
         uint16_t received_checksum = packet.header.checksum;
-        packet.header.checksum = 0;
         uint16_t computed_checksum = compute_checksum(&packet);
         if (received_checksum != computed_checksum) {
             printf("[recv corrupt packet]\n");

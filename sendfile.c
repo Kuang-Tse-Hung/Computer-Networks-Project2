@@ -133,7 +133,6 @@ int main(int argc, char *argv[]) {
 
             // Verify checksum
             uint16_t received_checksum = ack_packet.header.checksum;
-            ack_packet.header.checksum = 0;
             uint16_t computed_checksum = compute_checksum(&ack_packet);
             if (received_checksum != computed_checksum) {
                 printf("[recv corrupt ack packet]\n");
@@ -228,7 +227,6 @@ int main(int argc, char *argv[]) {
 
             // Verify checksum
             uint16_t received_checksum = ack_packet.header.checksum;
-            ack_packet.header.checksum = 0;
             uint16_t computed_checksum = compute_checksum(&ack_packet);
             if (received_checksum != computed_checksum) {
                 printf("[recv corrupt ack packet]\n");
