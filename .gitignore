@@ -2,4 +2,4 @@ core*
 recvfile
 sendfile
 *.recv
-.vscode
+.vscode/
