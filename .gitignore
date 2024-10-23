@@ -1,0 +1,5 @@
+core*
+recvfile
+sendfile
+*.recv
+.vscode
