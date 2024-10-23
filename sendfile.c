@@ -243,6 +243,8 @@ int main(int argc, char *argv[]) {
             if (ack_packet.header.type == PACKET_TYPE_ACK) {
                 uint32_t ack_num = ack_packet.header.ack_num;
                 printf("[recv ack] Ack Num: %u\n", ack_num);
+                if (ack_packet.header.sack_num != ack_num)
+                    printf("[recv sack] Sack Num: %u\n", ack_packet.header.sack_num);
 
                 // update sack: always update with the largest one, as largest one indicates the latest situation:
                 // when receiver gives an sack with a larger value, it means the receiver has filled the gap [ack: last_sack]
