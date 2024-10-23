@@ -10,6 +10,7 @@
 #include <netinet/in.h>
 #include <sys/time.h>
 #include <fcntl.h>
+#include <math.h>
 #include "packet.h"
 
 #define MAX_PACKET_SIZE (HEADER_SIZE + MAX_PAYLOAD_SIZE)
@@ -118,6 +119,10 @@ int main(int argc, char *argv[]) {
     window.packets[index] = &start_packet;
     gettimeofday(&window.time_sent[index], NULL);
 
+    printf("[debug] packet sending. seq_num: %d, type: %d, length: %d, retrans: %d\n", 
+        start_packet.header.seq_num, start_packet.header.type, start_packet.header.length, start_packet.header.retrans);
+    printf("[debug] the sending text: %s\n", start_packet.payload);
+
     serialize_packet(&start_packet, buffer);
     sendto(sockfd, buffer, HEADER_SIZE + start_packet.header.length, 0,
            (struct sockaddr *)&recv_addr, addr_len);
@@ -222,6 +227,8 @@ int main(int argc, char *argv[]) {
 
         while ((num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                                      (struct sockaddr *)&recv_addr, &addr_len)) > 0) {
+            
+            printf("[debug] num of bytes received: %ld\n", num_bytes);
             Packet ack_packet;
             deserialize_packet(buffer, &ack_packet);
 
@@ -272,27 +279,29 @@ int main(int argc, char *argv[]) {
 
                     RTO = SRTT + 4 * RTTVAR;
                 }
+                printf("[RTO update] new rto: %lu\n", RTO);
             }
         }
 
         // Check for rto and retransmit if necessary
         struct timeval now;
         gettimeofday(&now, NULL);
+        int index = window.base_seq_num % WINDOW_SIZE;
+        Packet *packet = window.packets[index];
         // only retransmit the current missing packet
-        uint32_t i = window.base_seq_num;
-        int index = i % WINDOW_SIZE;
-        long elapsed = (now.tv_sec - window.time_sent[index].tv_sec) * 1000000 +
-                               (now.tv_usec - window.time_sent[index].tv_usec);
-        if (elapsed >= RTO) {
-            // Retransmit packet
-            Packet *packet = window.packets[index];
-            packet->header.retrans = 1;
-            packet->header.checksum = compute_checksum(packet);
-            serialize_packet(packet, buffer);
-            sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
-                    (struct sockaddr *)&recv_addr, addr_len);
-            gettimeofday(&window.time_sent[index], NULL);
-            printf("[resend data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
+        if (packet) {
+            long elapsed = (now.tv_sec - window.time_sent[index].tv_sec) * 1000000 +
+                                (now.tv_usec - window.time_sent[index].tv_usec);
+            if (elapsed >= RTO) {
+                // Retransmit packet
+                packet->header.retrans = 1;
+                packet->header.checksum = compute_checksum(packet);
+                serialize_packet(packet, buffer);
+                sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
+                        (struct sockaddr *)&recv_addr, addr_len);
+                gettimeofday(&window.time_sent[index], NULL);
+                printf("[resend data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
+            }
         }
     }
 

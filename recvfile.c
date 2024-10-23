@@ -79,6 +79,10 @@ int main(int argc, char *argv[]) {
         Packet packet;
         deserialize_packet(buffer, &packet);
 
+        // printf("[debug] packet received. seq_num: %d, type: %d, length: %d, retrans: %d\n", 
+        // packet.header.seq_num, packet.header.type, packet.header.length, packet.header.retrans);
+        // printf("[debug] the received text: %s\n", packet.payload);
+
         // Verify checksum
         uint16_t received_checksum = packet.header.checksum;
         uint16_t computed_checksum = compute_checksum(&packet);
@@ -108,6 +112,7 @@ int main(int argc, char *argv[]) {
             Packet ack_packet = {0};
             ack_packet.header.type = PACKET_TYPE_ACK;
             ack_packet.header.ack_num = window.base_seq_num;
+            ack_packet.header.retrans = packet.header.retrans;
             ack_packet.header.checksum = compute_checksum(&ack_packet);
 
             serialize_packet(&ack_packet, buffer);
@@ -176,6 +181,7 @@ int main(int argc, char *argv[]) {
                     memset(&ack_packet, 0, sizeof(ack_packet));
                     ack_packet.header.type = PACKET_TYPE_ACK;
                     ack_packet.header.ack_num = ack_num;
+                    ack_packet.header.retrans = packet.header.retrans;
                     ack_packet.header.checksum = compute_checksum(&ack_packet);
 
                     serialize_packet(&ack_packet, buffer);
@@ -206,6 +212,7 @@ int main(int argc, char *argv[]) {
             Packet ack_packet = {0};
             ack_packet.header.type = PACKET_TYPE_ACK;
             ack_packet.header.ack_num = packet.header.seq_num + 1;
+            ack_packet.header.retrans = packet.header.retrans;
             ack_packet.header.checksum = compute_checksum(&ack_packet);
 
             serialize_packet(&ack_packet, buffer);
