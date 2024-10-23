@@ -76,9 +76,6 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        Packet packet;
-        deserialize_packet(buffer, &packet);
-
         // printf("[debug] packet received. seq_num: %d, type: %d, length: %d, retrans: %d\n", 
         // packet.header.seq_num, packet.header.type, packet.header.length, packet.header.retrans);
         // printf("[debug] the received text: %s\n", packet.payload);
@@ -221,7 +218,6 @@ int main(int argc, char *argv[]) {
                     ack_packet.header.ack_num = ack_num;
                     ack_packet.header.sack_num = sack_num;
                     ack_packet.header.retrans = packet.header.retrans;
-                    ack_packet.header.checksum = compute_checksum(&ack_packet);
 
                     serialize_packet(&ack_packet, buffer);
                     sendto(sockfd, buffer, HEADER_SIZE, 0,
