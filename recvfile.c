@@ -68,7 +68,6 @@ int main(int argc, char *argv[]) {
     printf("Receiver started, waiting for sender...\n");
 
     while (1) {
-        sleep(1);
         // Receive a packet from the sender
         num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                              (struct sockaddr *)&sender_addr, &addr_len);
@@ -201,7 +200,7 @@ int main(int argc, char *argv[]) {
                     sendto(sockfd, buffer, HEADER_SIZE, 0,
                         (struct sockaddr *)&sender_addr, addr_len);
                     printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
-                    if (ack_packet.header.sack_num)
+                    if (ack_packet.header.sack_num != ack_packet.header.ack_num)
                         printf("[send sack] Sack Num: %u\n", ack_packet.header.sack_num);
                 }
 

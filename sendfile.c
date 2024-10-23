@@ -224,7 +224,8 @@ int main(int argc, char *argv[]) {
         timeout.tv_sec = 0;
         timeout.tv_usec = 100000;  // 100ms timeout for recvfrom
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-        int sack = 0;
+        // make sure to retransmit the base num packet if necessary
+        int sack = window.base_seq_num + 1;
         while ((num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                                      (struct sockaddr *)&recv_addr, &addr_len)) > 0) {
             
@@ -290,8 +291,6 @@ int main(int argc, char *argv[]) {
         }
 
         // Check for rto and retransmit if necessary
-        if (sack >= window.next_seq_num)
-            continue;
         // retransmit until the sack
         struct timeval now;
         gettimeofday(&now, NULL);
