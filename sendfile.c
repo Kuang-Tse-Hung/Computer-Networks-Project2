@@ -112,17 +112,13 @@ int main(int argc, char *argv[]) {
     start_packet.header.length = strlen(file_path);
     memcpy(start_packet.payload, file_path, start_packet.header.length);
     start_packet.header.retrans = 0;
-    start_packet.header.checksum = compute_checksum(&start_packet);
 
     // Store the start packet in window
     int index = start_packet.header.seq_num % WINDOW_SIZE;  // Use modulo for circular buffer
     window.packets[index] = &start_packet;
     gettimeofday(&window.time_sent[index], NULL);
 
-    printf("[debug] packet sending. seq_num: %d, type: %d, length: %d, retrans: %d\n", 
-        start_packet.header.seq_num, start_packet.header.type, start_packet.header.length, start_packet.header.retrans);
-    printf("[debug] the sending text: %s\n", start_packet.payload);
-
+    // Serialize packet (checksum computed inside serialize_packet)
     serialize_packet(&start_packet, buffer);
     sendto(sockfd, buffer, HEADER_SIZE + start_packet.header.length, 0,
            (struct sockaddr *)&recv_addr, addr_len);
@@ -133,16 +129,26 @@ int main(int argc, char *argv[]) {
         num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                              (struct sockaddr *)&recv_addr, &addr_len);
         if (num_bytes > 0) {
+            // Verify checksum of received ACK packet
+            uint16_t received_checksum;
+            memcpy(&received_checksum, buffer + 8, sizeof(received_checksum));
+            received_checksum = ntohs(received_checksum);
+
+            // Zero out the checksum field in the buffer for calculation
+            buffer[8] = 0;
+            buffer[9] = 0;
+
+            // Compute checksum over the received packet
+            uint16_t computed_checksum = compute_checksum(buffer, num_bytes);
+
+            if (computed_checksum != received_checksum) {
+                printf("[recv corrupt ack]\n");
+                continue; // Discard the packet
+            }
+
+            // Deserialize the packet
             Packet ack_packet;
             deserialize_packet(buffer, &ack_packet);
-
-            // Verify checksum
-            uint16_t received_checksum = ack_packet.header.checksum;
-            uint16_t computed_checksum = compute_checksum(&ack_packet);
-            if (received_checksum != computed_checksum) {
-                printf("[recv corrupt ack packet]\n");
-                continue;
-            }
 
             if (ack_packet.header.type == PACKET_TYPE_ACK &&
                 ack_packet.header.ack_num == start_packet.header.seq_num + 1) {
@@ -169,7 +175,6 @@ int main(int argc, char *argv[]) {
             usleep(RTO);
 
             start_packet.header.retrans = 1;
-            start_packet.header.checksum = compute_checksum(&start_packet);
             serialize_packet(&start_packet, buffer);
 
             sendto(sockfd, buffer, HEADER_SIZE + start_packet.header.length, 0,
@@ -204,15 +209,14 @@ int main(int argc, char *argv[]) {
                 break;
             }
 
-            packet->header.checksum = compute_checksum(packet);
-
             // Store packet in window
             int index = packet->header.seq_num % WINDOW_SIZE;  // Use modulo for circular buffer
             window.packets[index] = packet;
             gettimeofday(&window.time_sent[index], NULL);
 
-            // Send packet
+            // Serialize packet (checksum computed inside serialize_packet)
             serialize_packet(packet, buffer);
+            // Send packet
             sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
                    (struct sockaddr *)&recv_addr, addr_len);
             printf("[send data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
@@ -228,18 +232,27 @@ int main(int argc, char *argv[]) {
         int sack = window.base_seq_num + 1;
         while ((num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                                      (struct sockaddr *)&recv_addr, &addr_len)) > 0) {
-            
             printf("[debug] num of bytes received: %ld\n", num_bytes);
+            // Verify checksum of received ACK packet
+            uint16_t received_checksum;
+            memcpy(&received_checksum, buffer + 8, sizeof(received_checksum));
+            received_checksum = ntohs(received_checksum);
+
+            // Zero out the checksum field in the buffer for calculation
+            buffer[8] = 0;
+            buffer[9] = 0;
+
+            // Compute checksum over the received packet
+            uint16_t computed_checksum = compute_checksum(buffer, num_bytes);
+
+            if (computed_checksum != received_checksum) {
+                printf("[recv corrupt ack]\n");
+                continue; // Discard the packet
+            }
+
+            // Deserialize the packet
             Packet ack_packet;
             deserialize_packet(buffer, &ack_packet);
-
-            // Verify checksum
-            uint16_t received_checksum = ack_packet.header.checksum;
-            uint16_t computed_checksum = compute_checksum(&ack_packet);
-            if (received_checksum != computed_checksum) {
-                printf("[recv corrupt ack packet]\n");
-                continue;
-            }
 
             if (ack_packet.header.type == PACKET_TYPE_ACK) {
                 uint32_t ack_num = ack_packet.header.ack_num;
@@ -303,7 +316,7 @@ int main(int argc, char *argv[]) {
                     // Retransmit packet
                     Packet *packet = window.packets[index];
                     packet->header.retrans = 1;
-                    packet->header.checksum = compute_checksum(packet);
+                    // Re-serialize packet (checksum computed inside serialize_packet)
                     serialize_packet(packet, buffer);
                     sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
                            (struct sockaddr *)&recv_addr, addr_len);
@@ -319,8 +332,8 @@ int main(int argc, char *argv[]) {
     end_packet.header.seq_num = window.next_seq_num++;
     end_packet.header.type = PACKET_TYPE_END;
     end_packet.header.retrans = 0;
-    end_packet.header.checksum = compute_checksum(&end_packet);
 
+    // Serialize packet (checksum computed inside serialize_packet)
     serialize_packet(&end_packet, buffer);
     sendto(sockfd, buffer, HEADER_SIZE, 0,
            (struct sockaddr *)&recv_addr, addr_len);
@@ -336,8 +349,27 @@ int main(int argc, char *argv[]) {
         num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                              (struct sockaddr *)&recv_addr, &addr_len);
         if (num_bytes > 0) {
+            // Verify checksum of received ACK packet
+            uint16_t received_checksum;
+            memcpy(&received_checksum, buffer + 8, sizeof(received_checksum));
+            received_checksum = ntohs(received_checksum);
+
+            // Zero out the checksum field in the buffer for calculation
+            buffer[8] = 0;
+            buffer[9] = 0;
+
+            // Compute checksum over the received packet
+            uint16_t computed_checksum = compute_checksum(buffer, num_bytes);
+
+            if (computed_checksum != received_checksum) {
+                printf("[recv corrupt ack]\n");
+                continue; // Discard the packet
+            }
+
+            // Deserialize the packet
             Packet ack_packet;
             deserialize_packet(buffer, &ack_packet);
+
             if (ack_packet.header.type == PACKET_TYPE_ACK &&
                 ack_packet.header.ack_num == end_packet.header.seq_num + 1) {
                 printf("[recv ack] Ack Num: %u\n", ack_packet.header.ack_num);
@@ -346,7 +378,6 @@ int main(int argc, char *argv[]) {
         } else {
             // Timeout occurred, retransmit end packet
             end_packet.header.retrans = 0;
-            end_packet.header.checksum = compute_checksum(&end_packet);
             serialize_packet(&end_packet, buffer);
             sendto(sockfd, buffer, HEADER_SIZE, 0,
                    (struct sockaddr *)&recv_addr, addr_len);
