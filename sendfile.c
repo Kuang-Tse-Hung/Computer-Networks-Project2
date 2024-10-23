@@ -224,7 +224,7 @@ int main(int argc, char *argv[]) {
         timeout.tv_sec = 0;
         timeout.tv_usec = 100000;  // 100ms timeout for recvfrom
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-
+        int sack = 0;
         while ((num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                                      (struct sockaddr *)&recv_addr, &addr_len)) > 0) {
             
@@ -243,6 +243,10 @@ int main(int argc, char *argv[]) {
             if (ack_packet.header.type == PACKET_TYPE_ACK) {
                 uint32_t ack_num = ack_packet.header.ack_num;
                 printf("[recv ack] Ack Num: %u\n", ack_num);
+
+                // update sack: always update with the largest one, as largest one indicates the latest situation:
+                // when receiver gives an sack with a larger value, it means the receiver has filled the gap [ack: last_sack]
+                sack = ack_packet.header.sack_num > sack ? ack_packet.header.sack_num : sack;
 
                 if (ack_num > window.base_seq_num) {
                     // Mark packets as acknowledged
@@ -284,23 +288,27 @@ int main(int argc, char *argv[]) {
         }
 
         // Check for rto and retransmit if necessary
+        if (sack >= window.next_seq_num)
+            continue;
+        // retransmit until the sack
         struct timeval now;
         gettimeofday(&now, NULL);
-        int index = window.base_seq_num % WINDOW_SIZE;
-        Packet *packet = window.packets[index];
-        // only retransmit the current missing packet
-        if (packet) {
-            long elapsed = (now.tv_sec - window.time_sent[index].tv_sec) * 1000000 +
-                                (now.tv_usec - window.time_sent[index].tv_usec);
-            if (elapsed >= RTO) {
-                // Retransmit packet
-                packet->header.retrans = 1;
-                packet->header.checksum = compute_checksum(packet);
-                serialize_packet(packet, buffer);
-                sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
-                        (struct sockaddr *)&recv_addr, addr_len);
-                gettimeofday(&window.time_sent[index], NULL);
-                printf("[resend data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
+        for (uint32_t i = window.base_seq_num; i < sack; i++) {
+            int index = i % WINDOW_SIZE;
+            if (window.packets[index]) {
+                long elapsed = (now.tv_sec - window.time_sent[index].tv_sec) * 1000000 +
+                               (now.tv_usec - window.time_sent[index].tv_usec);
+                if (elapsed >= RTO) {
+                    // Retransmit packet
+                    Packet *packet = window.packets[index];
+                    packet->header.retrans = 1;
+                    packet->header.checksum = compute_checksum(packet);
+                    serialize_packet(packet, buffer);
+                    sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
+                           (struct sockaddr *)&recv_addr, addr_len);
+                    gettimeofday(&window.time_sent[index], NULL);
+                    printf("[resend data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
+                }
             }
         }
     }

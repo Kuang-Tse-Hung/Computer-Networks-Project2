@@ -22,15 +22,17 @@ void serialize_packet(Packet *packet, uint8_t *buffer) {
 
     uint32_t seq_num = htonl(header->seq_num);
     uint32_t ack_num = htonl(header->ack_num);
+    uint32_t sack_num = htonl(header->sack_num);
     uint16_t checksum = htons(header->checksum);
     uint16_t length = htons(header->length);
     uint8_t type = header->type;
 
     memcpy(buffer, &seq_num, sizeof(seq_num));
     memcpy(buffer + 4, &ack_num, sizeof(ack_num));
-    memcpy(buffer + 8, &checksum, sizeof(checksum));
-    memcpy(buffer + 10, &length, sizeof(length));
-    memcpy(buffer + 12, &type, sizeof(type));
+    memcpy(buffer + 8, &sack_num, sizeof(sack_num));
+    memcpy(buffer + 12, &checksum, sizeof(checksum));
+    memcpy(buffer + 14, &length, sizeof(length));
+    memcpy(buffer + 16, &type, sizeof(type));
     memcpy(buffer + HEADER_SIZE, packet->payload, header->length);
 }
 
@@ -39,12 +41,14 @@ void deserialize_packet(uint8_t *buffer, Packet *packet) {
 
     memcpy(&header->seq_num, buffer, sizeof(header->seq_num));
     memcpy(&header->ack_num, buffer + 4, sizeof(header->ack_num));
-    memcpy(&header->checksum, buffer + 8, sizeof(header->checksum));
-    memcpy(&header->length, buffer + 10, sizeof(header->length));
-    memcpy(&header->type, buffer + 12, sizeof(header->type));
+    memcpy(&header->sack_num, buffer + 8, sizeof(header->sack_num));
+    memcpy(&header->checksum, buffer + 12, sizeof(header->checksum));
+    memcpy(&header->length, buffer + 14, sizeof(header->length));
+    memcpy(&header->type, buffer + 16, sizeof(header->type));
 
     header->seq_num = ntohl(header->seq_num);
     header->ack_num = ntohl(header->ack_num);
+    header->sack_num = ntohl(header->sack_num);
     header->checksum = ntohs(header->checksum);
     header->length = ntohs(header->length);
 

@@ -68,6 +68,7 @@ int main(int argc, char *argv[]) {
     printf("Receiver started, waiting for sender...\n");
 
     while (1) {
+        sleep(1);
         // Receive a packet from the sender
         num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                              (struct sockaddr *)&sender_addr, &addr_len);
@@ -152,28 +153,39 @@ int main(int argc, char *argv[]) {
                     // Decide what ack to be sent
                     // If we received all consecutive seq_num before the current one, that means:
                     // 1. the current one is the last one, send the ack and update the last ack seqnum
-                    // 2. the seqnum is one of the missing ones in window[base_seq_num: largest_seq_num]
+                    // 2. the seqnum is one of the missing ones in window[base_seq_num: largest_seq_num], send with sack
+                    // note: when sack == ack, it means sack is invalid and all packets are received
                     int ack_num;
+                    int sack_num;
                     if (seq_num == window.last_ack_seq_num + 1) {
                         if (window.largest_seq_num == seq_num) {
                             window.last_ack_seq_num = seq_num;
 
                             ack_num = seq_num + 1;
+                            sack_num = ack_num;
                         }
                         else {
                             uint32_t i = seq_num + 1;
-                            // search for an index where missing or until the largest_index
+                            // search for an index where the missing ends or until the largest_index
                             while (i <= window.largest_seq_num && window.packets[i % WINDOW_SIZE] != NULL) {
                                 i++;
                             }
 
                             ack_num = window.packets[(i-1) % WINDOW_SIZE]->header.seq_num + 1;
+                            sack_num = i;
                         }
                         
                     }
                     // otherwise, some packets are missing in between, send the last ack seqnum
                     else {
+                        uint32_t i = window.last_ack_seq_num + 1;
+                        // search for an index where the missing ends or until the largest_index
+                        while (i <= window.largest_seq_num && window.packets[i % WINDOW_SIZE] != NULL) {
+                            i++;
+                        }
+
                         ack_num = window.last_ack_seq_num + 1;
+                        sack_num = i;
                     }
 
                     // send the ack
@@ -181,6 +193,7 @@ int main(int argc, char *argv[]) {
                     memset(&ack_packet, 0, sizeof(ack_packet));
                     ack_packet.header.type = PACKET_TYPE_ACK;
                     ack_packet.header.ack_num = ack_num;
+                    ack_packet.header.sack_num = sack_num;
                     ack_packet.header.retrans = packet.header.retrans;
                     ack_packet.header.checksum = compute_checksum(&ack_packet);
 
@@ -188,6 +201,8 @@ int main(int argc, char *argv[]) {
                     sendto(sockfd, buffer, HEADER_SIZE, 0,
                         (struct sockaddr *)&sender_addr, addr_len);
                     printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
+                    if (ack_packet.header.sack_num)
+                        printf("[send sack] Sack Num: %u\n", ack_packet.header.sack_num);
                 }
 
                 // Deliver all in-order packets
