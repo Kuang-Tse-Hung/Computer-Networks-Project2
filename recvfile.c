@@ -74,17 +74,26 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        // Verify checksum
+        uint16_t received_checksum;
+        memcpy(&received_checksum, buffer + 8, sizeof(received_checksum));
+        received_checksum = ntohs(received_checksum);
+
+        // Zero out the checksum field in the buffer for calculation
+        buffer[8] = 0;
+        buffer[9] = 0;
+
+        // Compute checksum over the received packet
+        uint16_t computed_checksum = compute_checksum(buffer, num_bytes);
+
+        if (computed_checksum != received_checksum) {
+            printf("[recv corrupt packet]\n");
+            continue; // Discard the packet
+        }
+
+        // Deserialize the packet
         Packet packet;
         deserialize_packet(buffer, &packet);
-
-        // Verify checksum
-        uint16_t received_checksum = packet.header.checksum;
-        packet.header.checksum = 0;
-        uint16_t computed_checksum = compute_checksum(&packet);
-        if (received_checksum != computed_checksum) {
-            printf("[recv corrupt packet]\n");
-            continue;
-        }
 
         // Handle START packet
         if (packet.header.type == PACKET_TYPE_START && expecting_start_packet) {
@@ -107,10 +116,12 @@ int main(int argc, char *argv[]) {
             Packet ack_packet = {0};
             ack_packet.header.type = PACKET_TYPE_ACK;
             ack_packet.header.ack_num = window.base_seq_num;
-            ack_packet.header.checksum = compute_checksum(&ack_packet);
 
-            serialize_packet(&ack_packet, buffer);
-            sendto(sockfd, buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
+            // Serialize and compute checksum
+            uint8_t ack_buffer[HEADER_SIZE];
+            serialize_packet(&ack_packet, ack_buffer);
+
+            sendto(sockfd, ack_buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
             printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
             continue;
         }
@@ -134,10 +145,12 @@ int main(int argc, char *argv[]) {
             Packet ack_packet = {0};
             ack_packet.header.type = PACKET_TYPE_ACK;
             ack_packet.header.ack_num = seq_num + 1;
-            ack_packet.header.checksum = compute_checksum(&ack_packet);
 
-            serialize_packet(&ack_packet, buffer);
-            sendto(sockfd, buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
+            // Serialize and compute checksum
+            uint8_t ack_buffer[HEADER_SIZE];
+            serialize_packet(&ack_packet, ack_buffer);
+
+            sendto(sockfd, ack_buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
             printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
 
             // Check if the packet is within the window
@@ -170,10 +183,12 @@ int main(int argc, char *argv[]) {
             Packet ack_packet = {0};
             ack_packet.header.type = PACKET_TYPE_ACK;
             ack_packet.header.ack_num = packet.header.seq_num + 1;
-            ack_packet.header.checksum = compute_checksum(&ack_packet);
 
-            serialize_packet(&ack_packet, buffer);
-            sendto(sockfd, buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
+            // Serialize and compute checksum
+            uint8_t ack_buffer[HEADER_SIZE];
+            serialize_packet(&ack_packet, ack_buffer);
+
+            sendto(sockfd, ack_buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
             printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
             break;
         }

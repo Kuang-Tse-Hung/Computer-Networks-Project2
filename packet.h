@@ -30,7 +30,7 @@ typedef struct {
 } Packet;
 
 // Function declarations
-uint16_t compute_checksum(Packet *packet);
+uint16_t compute_checksum(uint8_t *data, size_t length);
 void serialize_packet(Packet *packet, uint8_t *buffer);
 void deserialize_packet(uint8_t *buffer, Packet *packet);
 
