@@ -152,9 +152,9 @@ int main(int argc, char *argv[]) {
 
             // Calculate the index using modulo arithmetic for circular buffer
             int index = seq_num % WINDOW_SIZE;
-            printf("[debug] base_seq_num: %u, seq_num: %u, index: %d\n",
-                   window.base_seq_num, seq_num, index);
-
+            printf("[debug] base_seq_num: %u, last_ack_seq_num: %u, largest_ack_seq_num: %u, seq_num: %u, index: %d\n",
+                   window.base_seq_num, window.last_ack_seq_num, window.largest_ack_seq_num, seq_num, index);
+                
             // Send ACK
             // for the last consecutive packet received
 
@@ -166,34 +166,63 @@ int main(int argc, char *argv[]) {
             int ack_num;
             int sack_num;
             if (seq_num == window.last_ack_seq_num + 1) {
+                ack_num = window.last_ack_seq_num + 1;
                 if (seq_num == window.largest_ack_seq_num + 1) {
-                    window.last_ack_seq_num = seq_num;
-
-                    ack_num = seq_num + 1;
+                    printf("[debug] append\n");
+    
+                    window.last_ack_seq_num++;
                     sack_num = ack_num;
                 }
                 else {
+                    printf("[debug] fill-gap\n");
                     uint32_t i = seq_num + 1;
-                    // search for an index where the missing ends or until the largest_index
-                    while (i <= window.largest_ack_seq_num && window.packets[i % WINDOW_SIZE] != NULL) {
+                    // search for an index where the missing ends or until the largest_ack_seq_num
+                    while (i <= window.largest_ack_seq_num && window.packets[i % WINDOW_SIZE] == NULL) {
                         i++;
                     }
 
-                    ack_num = window.packets[(i-1) % WINDOW_SIZE]->header.seq_num + 1;
+                    window.last_ack_seq_num++;
                     sack_num = i;
+                    // no gap at the current area, search for another gap, and use that to update ack, last_ack_seq_num, and sack
+                    if (i == seq_num + 1) {
+                        uint32_t j = i;
+                        while (j <= window.largest_ack_seq_num && window.packets[j % WINDOW_SIZE] != NULL) {
+                            j++;
+                        }
+                        ack_num = j;
+                        window.last_ack_seq_num = j-1;
+                        // if there is no gap
+                        if (j > window.largest_ack_seq_num) {
+                            printf("[debug] all gaps filled\n");
+                            sack_num = ack_num;
+                        }
+                        else {
+                            // gotta find another sack which indicates the end of the gap
+                            uint32_t k = j;
+                            // search for an index where the missing ends or until the largest_ack_seq_num
+                            while (k <= window.largest_ack_seq_num && window.packets[k % WINDOW_SIZE] == NULL) {
+                                k++;
+                            }
+                            sack_num = k;
+                        }
+                    }
                 }
-                
             }
-            // otherwise, some packets are missing in between, send the last ack seqnum
-            else {
+            // or, some packets are missing in between, send the last ack seqnum
+            else if (seq_num > window.last_ack_seq_num + 1) {
                 uint32_t i = window.last_ack_seq_num + 1;
-                // search for an index where the missing ends or until the largest_index
-                while (i <= window.largest_ack_seq_num && window.packets[i % WINDOW_SIZE] != NULL) {
+                // search for an index where the missing ends or until the seq_num as packets[seq_num] might be null for now
+                while (i < seq_num && window.packets[i % WINDOW_SIZE] == NULL) {
                     i++;
                 }
 
                 ack_num = window.last_ack_seq_num + 1;
                 sack_num = i;
+            }
+            // otherwise, some previous packet received, send the last ack
+            else {
+                ack_num = window.last_ack_seq_num + 1;
+                sack_num = ack_num;
             }
 
             // send the ack
