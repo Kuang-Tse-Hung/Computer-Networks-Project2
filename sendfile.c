@@ -14,7 +14,7 @@
 #include "packet.h"
 
 #define MAX_PACKET_SIZE (HEADER_SIZE + MAX_PAYLOAD_SIZE)
-#define WINDOW_SIZE 10
+#define WINDOW_SIZE 1024
 #define TIMEOUT_SEC 1  // Timeout in seconds
 
 typedef struct {

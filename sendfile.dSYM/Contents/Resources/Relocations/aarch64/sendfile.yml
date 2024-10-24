@@ -1,0 +1,14 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     sendfile
+relocations:
+  - { offsetInCU: 0x26, offset: 0x26, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x0, symBinAddr: 0x1000022E4, symSize: 0x12E4 }
+  - { offsetInCU: 0x89, offset: 0x89, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x0, symBinAddr: 0x1000022E4, symSize: 0x12E4 }
+  - { offsetInCU: 0x464, offset: 0x464, size: 0x8, addend: 0x0, symName: __OSSwapInt16, symObjAddr: 0x12E4, symBinAddr: 0x1000035C8, symSize: 0x24 }
+  - { offsetInCU: 0x26, offset: 0x6E7, size: 0x8, addend: 0x0, symName: _compute_checksum, symObjAddr: 0x0, symBinAddr: 0x1000035EC, symSize: 0x134 }
+  - { offsetInCU: 0x4C, offset: 0x70D, size: 0x8, addend: 0x0, symName: _compute_checksum, symObjAddr: 0x0, symBinAddr: 0x1000035EC, symSize: 0x134 }
+  - { offsetInCU: 0xE4, offset: 0x7A5, size: 0x8, addend: 0x0, symName: _serialize_packet, symObjAddr: 0x134, symBinAddr: 0x100003720, symSize: 0x218 }
+  - { offsetInCU: 0x186, offset: 0x847, size: 0x8, addend: 0x0, symName: __OSSwapInt32, symObjAddr: 0x34C, symBinAddr: 0x100003938, symSize: 0x20 }
+  - { offsetInCU: 0x1AE, offset: 0x86F, size: 0x8, addend: 0x0, symName: __OSSwapInt16, symObjAddr: 0x36C, symBinAddr: 0x100003958, symSize: 0x24 }
+  - { offsetInCU: 0x1D6, offset: 0x897, size: 0x8, addend: 0x0, symName: _deserialize_packet, symObjAddr: 0x390, symBinAddr: 0x10000397C, symSize: 0x1D4 }
+...
