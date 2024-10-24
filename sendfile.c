@@ -271,7 +271,7 @@ int main(int argc, char *argv[]) {
                 // update sack: always update with the largest one, as largest one indicates the latest situation:
                 // when receiver gives an sack with a larger value, it means the receiver has filled the gap [ack: last_sack]
                 sack = ack_packet.header.sack_num > sack ? ack_packet.header.sack_num : sack;
-
+                printf("[debug] Sack: %u\n", sack);
                 if (ack_num > window.base_seq_num) {
                     // Mark packets as acknowledged
                     for (uint32_t i = window.base_seq_num; i < ack_num; i++) {
