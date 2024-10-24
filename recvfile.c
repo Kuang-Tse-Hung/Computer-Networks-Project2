@@ -10,8 +10,8 @@
 #include <netinet/in.h>
 #include "packet.h"
 
-#define MAX_PACKET_SIZE (13 + MAX_PAYLOAD_SIZE)
-#define WINDOW_SIZE 10
+#define MAX_PACKET_SIZE (HEADER_SIZE + MAX_PAYLOAD_SIZE)
+#define WINDOW_SIZE 1000  // Adjusted to match sender's maximum window size
 
 typedef struct {
     Packet *packets[WINDOW_SIZE];
@@ -136,11 +136,6 @@ int main(int argc, char *argv[]) {
             uint32_t seq_num = packet.header.seq_num;
             printf("[recv data] Seq: %u Length: %u\n", seq_num, packet.header.length);
 
-            // Calculate the index using modulo arithmetic for circular buffer
-            int index = seq_num % WINDOW_SIZE;
-            printf("[debug] base_seq_num: %u, seq_num: %u, index: %d\n",
-                   window.base_seq_num, seq_num, index);
-
             // Send ACK for the received packet
             Packet ack_packet = {0};
             ack_packet.header.type = PACKET_TYPE_ACK;
@@ -155,6 +150,8 @@ int main(int argc, char *argv[]) {
 
             // Check if the packet is within the window
             if (seq_num >= window.base_seq_num && seq_num < window.base_seq_num + WINDOW_SIZE) {
+                int index = seq_num % WINDOW_SIZE;
+
                 // Store the packet if it hasn't been received before
                 if (window.packets[index] == NULL) {
                     window.packets[index] = malloc(sizeof(Packet));

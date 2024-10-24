@@ -12,9 +12,10 @@
 #include <fcntl.h>
 #include "packet.h"
 
-#define MAX_PACKET_SIZE (13 + MAX_PAYLOAD_SIZE)
-#define WINDOW_SIZE 10
-#define TIMEOUT_SEC 1  // Timeout in seconds
+#define MAX_PACKET_SIZE (HEADER_SIZE + MAX_PAYLOAD_SIZE)
+#define FIXED_RTO 500000      // Fixed Retransmission Timeout in microseconds (500 ms)
+#define MAX_CWND 1000.0       // Maximum congestion window size to limit memory usage
+#define WINDOW_SIZE 1000      // Should be at least as big as MAX_CWND
 
 typedef struct {
     Packet *packets[WINDOW_SIZE];
@@ -84,11 +85,15 @@ int main(int argc, char *argv[]) {
     window.base_seq_num = 0;  // Will update after START packet
     window.next_seq_num = 0;
 
-    // Set socket timeout for recvfrom (non-blocking)
+    // Congestion Control Variables
+    double cwnd = 1.0;          // Start with a window size of 1 packet
+    double ssthresh = 64.0;     // Initial slow start threshold
+    const double max_cwnd = MAX_CWND; // Maximum window size to limit memory usage
+    int dup_ack_count = 0;
+    uint32_t last_ack_num = 0;
+
+    // Set socket timeout for recvfrom
     struct timeval timeout;
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 0;  // Non-blocking
-    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
     // Send start packet with filename
     Packet start_packet = {0};
@@ -105,6 +110,11 @@ int main(int argc, char *argv[]) {
 
     // Wait for ACK of start packet
     while (1) {
+        // Set socket timeout to fixed RTO
+        timeout.tv_sec = (int)(FIXED_RTO / 1000000);
+        timeout.tv_usec = (int)(FIXED_RTO - (timeout.tv_sec * 1000000));
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
         num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                              (struct sockaddr *)&recv_addr, &addr_len);
         if (num_bytes > 0) {
@@ -139,7 +149,7 @@ int main(int argc, char *argv[]) {
             }
         } else {
             // Timeout, retransmit start packet
-            usleep(TIMEOUT_SEC * 1000000);
+            printf("[timeout waiting for ack of start packet]\n");
             // Re-serialize and send the start packet
             serialize_packet(&start_packet, buffer);
             sendto(sockfd, buffer, HEADER_SIZE + start_packet.header.length, 0,
@@ -152,7 +162,8 @@ int main(int argc, char *argv[]) {
     int eof = 0;
     while (!eof || window.base_seq_num < window.next_seq_num) {
         // Send packets within the window
-        while (!eof && window.next_seq_num < window.base_seq_num + WINDOW_SIZE) {
+        while (!eof && window.next_seq_num < window.base_seq_num + (uint32_t)cwnd &&
+               window.next_seq_num < window.base_seq_num + (uint32_t)max_cwnd) {
             Packet *packet = malloc(sizeof(Packet));
             memset(packet, 0, sizeof(Packet));
             packet->header.seq_num = window.next_seq_num++;
@@ -185,17 +196,19 @@ int main(int argc, char *argv[]) {
             sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
                    (struct sockaddr *)&recv_addr, addr_len);
             printf("[send data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
-            printf("[debug] base_seq_num: %u, next_seq_num: %u, index: %d\n",
-                   window.base_seq_num, window.next_seq_num, index);
+            printf("[debug] base_seq_num: %u, next_seq_num: %u, cwnd: %.2f, ssthresh: %.2f\n",
+                   window.base_seq_num, window.next_seq_num, cwnd, ssthresh);
         }
 
-        // Receive ACKs
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 100000;  // 100ms timeout for recvfrom
+        // Adjust socket timeout to fixed RTO
+        timeout.tv_sec = (int)(FIXED_RTO / 1000000);
+        timeout.tv_usec = (int)(FIXED_RTO - (timeout.tv_sec * 1000000));
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
-        while ((num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
-                                     (struct sockaddr *)&recv_addr, &addr_len)) > 0) {
+        // Receive ACKs
+        num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
+                             (struct sockaddr *)&recv_addr, &addr_len);
+        while (num_bytes > 0) {
             // Verify checksum of received ACK packet
             uint16_t received_checksum;
             memcpy(&received_checksum, buffer + 8, sizeof(received_checksum));
@@ -210,6 +223,9 @@ int main(int argc, char *argv[]) {
 
             if (computed_checksum != received_checksum) {
                 printf("[recv corrupt ack]\n");
+                // Try receiving the next packet
+                num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
+                                     (struct sockaddr *)&recv_addr, &addr_len);
                 continue; // Discard the packet
             }
 
@@ -222,19 +238,64 @@ int main(int argc, char *argv[]) {
                 printf("[recv ack] Ack Num: %u\n", ack_num);
 
                 if (ack_num > window.base_seq_num) {
+                    // Successful ACK, reset duplicate ACK count
+                    dup_ack_count = 0;
+                    last_ack_num = ack_num;
+
                     // Mark packets as acknowledged
                     for (uint32_t i = window.base_seq_num; i < ack_num; i++) {
-                        int index = i % WINDOW_SIZE;  // Use modulo for circular buffer
-                        if (window.packets[index]) {
-                            free(window.packets[index]);
-                            window.packets[index] = NULL;
-                            window.acked[index] = 1;
+                        int idx = i % WINDOW_SIZE;  // Use modulo for circular buffer
+                        if (window.packets[idx]) {
+                            free(window.packets[idx]);
+                            window.packets[idx] = NULL;
+                            window.acked[idx] = 1;
                         }
                     }
                     window.base_seq_num = ack_num;  // Slide the window
                     printf("[slide window] new base_seq_num: %u\n", window.base_seq_num);
+
+                    // Update cwnd
+                    if (cwnd < ssthresh) {
+                        // Slow start
+                        cwnd += 1.0;
+                    } else {
+                        // Congestion avoidance
+                        cwnd += 1.0 / cwnd;
+                    }
+
+                    // Ensure cwnd does not exceed max_cwnd
+                    if (cwnd > max_cwnd) cwnd = max_cwnd;
+
+                } else if (ack_num == window.base_seq_num) {
+                    // Duplicate ACK
+                    dup_ack_count++;
+                    if (dup_ack_count == 3) {
+                        // Fast retransmit
+                        printf("[fast retransmit] Ack Num: %u\n", ack_num);
+                        ssthresh = cwnd / 2;
+                        if (ssthresh < 1) ssthresh = 1;
+                        cwnd = ssthresh + 3;
+
+                        // Retransmit the missing packet
+                        int index = window.base_seq_num % WINDOW_SIZE;
+                        Packet *packet = window.packets[index];
+                        if (packet) {
+                            serialize_packet(packet, buffer);
+                            sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
+                                   (struct sockaddr *)&recv_addr, addr_len);
+                            gettimeofday(&window.time_sent[index], NULL);
+                            printf("[retransmit data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
+                        }
+                    }
+                } else {
+                    // ACK for a packet we've already acknowledged
+                    printf("[recv old ack] Ack Num: %u\n", ack_num);
                 }
             }
+
+            // Try receiving the next packet
+            num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
+                                 (struct sockaddr *)&recv_addr, &addr_len);
         }
 
         // Check for timeouts and retransmit if necessary
@@ -245,16 +306,21 @@ int main(int argc, char *argv[]) {
             if (window.packets[index] && !window.acked[index]) {
                 long elapsed = (now.tv_sec - window.time_sent[index].tv_sec) * 1000000 +
                                (now.tv_usec - window.time_sent[index].tv_usec);
-                if (elapsed >= TIMEOUT_SEC * 1000000) {
+                if (elapsed >= FIXED_RTO * 1.5) {
+                    // Timeout occurred
+                    printf("[timeout] Seq: %u\n", window.packets[index]->header.seq_num);
+                    ssthresh = cwnd / 2;
+                    if (ssthresh < 1) ssthresh = 1;
+                    cwnd = 1.0; // Reset cwnd to 1
+                    dup_ack_count = 0;
+
                     // Retransmit packet
                     Packet *packet = window.packets[index];
-
-                    // Re-serialize packet (checksum computed inside serialize_packet)
                     serialize_packet(packet, buffer);
                     sendto(sockfd, buffer, HEADER_SIZE + packet->header.length, 0,
                            (struct sockaddr *)&recv_addr, addr_len);
                     gettimeofday(&window.time_sent[index], NULL);
-                    printf("[resend data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
+                    printf("[retransmit data] Seq: %u Length: %u\n", packet->header.seq_num, packet->header.length);
                 }
             }
         }
@@ -271,13 +337,13 @@ int main(int argc, char *argv[]) {
            (struct sockaddr *)&recv_addr, addr_len);
     printf("[send end packet] Seq: %u\n", end_packet.header.seq_num);
 
-    // Set socket timeout before waiting for ACK
-    timeout.tv_sec = TIMEOUT_SEC;  // e.g., 1 second
-    timeout.tv_usec = 0;
-    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-
     // Wait for ACK of end packet
     while (1) {
+        // Set socket timeout to fixed RTO
+        timeout.tv_sec = (int)(FIXED_RTO / 1000000);
+        timeout.tv_usec = (int)(FIXED_RTO - (timeout.tv_sec * 1000000));
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
         num_bytes = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                              (struct sockaddr *)&recv_addr, &addr_len);
         if (num_bytes > 0) {
@@ -309,6 +375,7 @@ int main(int argc, char *argv[]) {
             }
         } else {
             // Timeout occurred, retransmit end packet
+            printf("[timeout waiting for ack of end packet]\n");
             // Re-serialize and send the end packet
             serialize_packet(&end_packet, buffer);
             sendto(sockfd, buffer, HEADER_SIZE, 0,

@@ -6,7 +6,7 @@
 #include <arpa/inet.h>
 #include <string.h>
 
-#define MAX_PAYLOAD_SIZE 1024  // Adjust as needed for MTU considerations
+#define MAX_PAYLOAD_SIZE 1024 // Adjust as needed for MTU considerations
 #define HEADER_SIZE 13         // Size of PacketHeader when serialized
 
 typedef enum {
