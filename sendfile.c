@@ -99,11 +99,11 @@ int main(int argc, char *argv[]) {
     // SRTT_i = alpha * SRTT_i-1 + (1 - alpha) * RTT_i
     // RTTVAR_i = (1 - beta) * RTTVAR_i-1 + beta * |SRTT_i - RTT_i|
     // RTO_i = SRTT_i + 4 * RTTVAR_i
-    long SRTT = 0;          // smoothed rtt
-    long RTTVAR = 0.75;     // rtt variation
-    long RTO = TIMEOUT_SEC * 1000000;  // initial rto
-    long alpha = 0.125;     // SRTT update factor
-    long beta = 0.25;       // RTTVAR update factor
+    double SRTT = 0;          // smoothed rtt
+    double RTTVAR = 0.75;     // rtt variation
+    double RTO = TIMEOUT_SEC * 1000000;  // initial rto
+    double alpha = 0.125;     // SRTT update factor
+    double beta = 0.25;       // RTTVAR update factor
 
     // Send start packet with filename
     Packet start_packet = {0};
@@ -171,6 +171,7 @@ int main(int argc, char *argv[]) {
                     SRTT = RTT;
                     RTTVAR = RTT / 2;
                     RTO = SRTT + 4 * RTTVAR;
+                    printf("[RTO initialize] rto: %lu\n", RTO);
                 }
 
                 // Update base_seq_num
@@ -292,22 +293,25 @@ int main(int argc, char *argv[]) {
                     struct timeval now;
                     gettimeofday(&now, NULL);
                     struct timeval sent = window.time_sent[index];
-                    long RTT = (now.tv_sec - sent.tv_sec) * 1000000 + (now.tv_usec - sent.tv_usec);
+                    double RTT = (now.tv_sec - sent.tv_sec) * 1000000 + (now.tv_usec - sent.tv_usec);
+                    printf("[RTT]: %lu\n", RTT);
 
                     if (SRTT == 0) {
                         // SRTT hasn't updated yet
                         SRTT = RTT;
                         RTTVAR = RTT / 2;
+                        printf("[SRTT initialize]: %lu\n", SRTT);
                     } 
                     else {
                         // smooth update
                         RTTVAR = (1 - beta) * RTTVAR + beta * fabs(SRTT - RTT);
                         SRTT = (1 - alpha) * SRTT + alpha * RTT;
+                        printf("[SRTT update]: %lu\n", SRTT);
                     }
 
                     RTO = SRTT + 4 * RTTVAR;
+                    printf("[RTO update] new rto: %lu\n", RTO);
                 }
-                printf("[RTO update] new rto: %lu\n", RTO);
             }
         }
 
@@ -318,7 +322,7 @@ int main(int argc, char *argv[]) {
         for (uint32_t i = window.base_seq_num; i < sack; i++) {
             int index = i % WINDOW_SIZE;
             if (window.packets[index]) {
-                long elapsed = (now.tv_sec - window.time_sent[index].tv_sec) * 1000000 +
+                double elapsed = (now.tv_sec - window.time_sent[index].tv_sec) * 1000000 +
                                (now.tv_usec - window.time_sent[index].tv_usec);
                 if (elapsed >= RTO) {
                     // Retransmit packet
@@ -349,7 +353,7 @@ int main(int argc, char *argv[]) {
 
     // Set socket timeout before waiting for ACK
     timeout.tv_sec = RTO * 1000000;  // e.g., 1 second
-    timeout.tv_usec = RTO % 1000000;
+    timeout.tv_usec = (long) RTO % 1000000;
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
     // Wait for ACK of end packet
