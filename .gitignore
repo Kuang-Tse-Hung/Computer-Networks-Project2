@@ -3,3 +3,4 @@ recvfile
 sendfile
 *.recv
 .vscode/
+*.dSYM
