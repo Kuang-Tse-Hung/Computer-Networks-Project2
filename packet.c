@@ -32,8 +32,8 @@ void serialize_packet(Packet *packet, uint8_t *buffer) {
     uint32_t seq_num = htonl(header->seq_num);
     uint32_t ack_num = htonl(header->ack_num);
     uint32_t sack_num = htonl(header->sack_num);
-    uint8_t retrans = header->retrans;
     uint16_t length = htons(header->length);
+    uint8_t retrans = header->retrans;
     uint8_t type = header->type;
     uint16_t checksum = 0; // Initialize checksum to zero
 
@@ -42,8 +42,8 @@ void serialize_packet(Packet *packet, uint8_t *buffer) {
     memcpy(buffer + 4, &ack_num, sizeof(ack_num));
     memcpy(buffer + 8, &sack_num, sizeof(sack_num));
     memcpy(buffer + 12, &checksum, sizeof(checksum)); // Placeholder for checksum
-    memcpy(buffer + 13, &retrans, sizeof(retrans));
-    memcpy(buffer + 15, &length, sizeof(length));
+    memcpy(buffer + 14, &length, sizeof(length));
+    memcpy(buffer + 16, &retrans, sizeof(retrans));
     memcpy(buffer + 17, &type, sizeof(type));
     memcpy(buffer + HEADER_SIZE, packet->payload, header->length);
 
@@ -63,8 +63,8 @@ void deserialize_packet(uint8_t *buffer, Packet *packet) {
     memcpy(&header->ack_num, buffer + 4, sizeof(header->ack_num));
     memcpy(&header->sack_num, buffer + 8, sizeof(header->sack_num));
     memcpy(&header->checksum, buffer + 12, sizeof(header->checksum));
-    memcpy(&header->retrans, buffer + 13, sizeof(header->retrans));
-    memcpy(&header->length, buffer + 15, sizeof(header->length));
+    memcpy(&header->length, buffer + 14, sizeof(header->length));
+    memcpy(&header->retrans, buffer + 16, sizeof(header->retrans));
     memcpy(&header->type, buffer + 17, sizeof(header->type));
 
     // Convert fields from network byte order to host byte order

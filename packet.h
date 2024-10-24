@@ -20,9 +20,9 @@ typedef struct {
     uint32_t seq_num;    // Sequence number
     uint32_t ack_num;    // Acknowledgment number
     uint32_t sack_num;   // Selective ack num
-    uint8_t retrans;     // is this a retransmitted packet, used for RRT calculation
     uint16_t checksum;   // Checksum for error detection
     uint16_t length;     // Length of the payload
+    uint8_t retrans;     // is this a retransmitted packet, used for RRT calculation
     uint8_t type;        // PacketType
 } __attribute__((packed)) PacketHeader;
 

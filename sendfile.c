@@ -118,11 +118,19 @@ int main(int argc, char *argv[]) {
     window.packets[index] = &start_packet;
     gettimeofday(&window.time_sent[index], NULL);
 
+    // printf("[debug] sending packet - seq_num: %d, ack_num: %d, sack_num: %d, type: %d, length: %d, payload: %s, retrnas: %d\n", 
+    // start_packet.header.seq_num, start_packet.header.ack_num, start_packet.header.sack_num, start_packet.header.type, start_packet.header.length, start_packet.payload, start_packet.header.retrans);
     // Serialize packet (checksum computed inside serialize_packet)
+    printf("[debug] send size: %d\n", HEADER_SIZE + start_packet.header.length);
     serialize_packet(&start_packet, buffer);
     sendto(sockfd, buffer, HEADER_SIZE + start_packet.header.length, 0,
            (struct sockaddr *)&recv_addr, addr_len);
-    printf("[send start packet] Seq: %u Filename: %s\n", start_packet.header.seq_num, file_path);
+
+    // deserialize_packet(buffer, &start_packet);
+    // printf("[debug] sent packet - seq_num: %d, ack_num: %d, sack_num: %d, type: %d, length: %d, payload: %s, retrnas: %d\n", 
+    // start_packet.header.seq_num, start_packet.header.ack_num, start_packet.header.sack_num, start_packet.header.type, start_packet.header.length, start_packet.payload, start_packet.header.retrans);
+
+    // printf("[send start packet] Seq: %u Filename: %s\n", start_packet.header.seq_num, file_path);
 
     // Wait for ACK of start packet
     while (1) {
@@ -131,12 +139,12 @@ int main(int argc, char *argv[]) {
         if (num_bytes > 0) {
             // Verify checksum of received ACK packet
             uint16_t received_checksum;
-            memcpy(&received_checksum, buffer + 8, sizeof(received_checksum));
+            memcpy(&received_checksum, buffer + 12, sizeof(received_checksum));
             received_checksum = ntohs(received_checksum);
 
             // Zero out the checksum field in the buffer for calculation
-            buffer[8] = 0;
-            buffer[9] = 0;
+            buffer[12] = 0;
+            buffer[13] = 0;
 
             // Compute checksum over the received packet
             uint16_t computed_checksum = compute_checksum(buffer, num_bytes);
@@ -235,12 +243,12 @@ int main(int argc, char *argv[]) {
             printf("[debug] num of bytes received: %ld\n", num_bytes);
             // Verify checksum of received ACK packet
             uint16_t received_checksum;
-            memcpy(&received_checksum, buffer + 8, sizeof(received_checksum));
+            memcpy(&received_checksum, buffer + 12, sizeof(received_checksum));
             received_checksum = ntohs(received_checksum);
 
             // Zero out the checksum field in the buffer for calculation
-            buffer[8] = 0;
-            buffer[9] = 0;
+            buffer[12] = 0;
+            buffer[13] = 0;
 
             // Compute checksum over the received packet
             uint16_t computed_checksum = compute_checksum(buffer, num_bytes);
@@ -351,12 +359,12 @@ int main(int argc, char *argv[]) {
         if (num_bytes > 0) {
             // Verify checksum of received ACK packet
             uint16_t received_checksum;
-            memcpy(&received_checksum, buffer + 8, sizeof(received_checksum));
+            memcpy(&received_checksum, buffer + 12, sizeof(received_checksum));
             received_checksum = ntohs(received_checksum);
 
             // Zero out the checksum field in the buffer for calculation
-            buffer[8] = 0;
-            buffer[9] = 0;
+            buffer[12] = 0;
+            buffer[13] = 0;
 
             // Compute checksum over the received packet
             uint16_t computed_checksum = compute_checksum(buffer, num_bytes);

@@ -16,8 +16,9 @@
 typedef struct {
     Packet *packets[WINDOW_SIZE];
     uint32_t base_seq_num;
-    uint32_t last_ack_seq_num;
-    uint32_t largest_seq_num;
+    // the following two fields are useful for determining whether a currently received packet is an “append” or a “fill-gap”.
+    uint32_t last_ack_seq_num; // the seqnum of the last packet of the consequtive acked packet series
+    uint32_t largest_ack_seq_num;  // the largest seqnum received
 } ReceiverWindow;
 
 int main(int argc, char *argv[]) {
@@ -59,7 +60,8 @@ int main(int argc, char *argv[]) {
     // Initialize the receiver window
     ReceiverWindow window;
     memset(&window, 0, sizeof(window));
-    window.base_seq_num = 0;  // Will update after START packet
+    // Will update after START packet, largest_ack_seq_num and last_ack_seq_num will initialized after START packet
+    window.base_seq_num = 0;
 
     FILE *fp = NULL;
     char filename[256] = {0};
@@ -76,18 +78,21 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        printf("[debug] receive size: %ld\n", num_bytes);
+
+
         // printf("[debug] packet received. seq_num: %d, type: %d, length: %d, retrans: %d\n", 
         // packet.header.seq_num, packet.header.type, packet.header.length, packet.header.retrans);
         // printf("[debug] the received text: %s\n", packet.payload);
 
         // Verify checksum
         uint16_t received_checksum;
-        memcpy(&received_checksum, buffer + 8, sizeof(received_checksum));
+        memcpy(&received_checksum, buffer + 12, sizeof(received_checksum));
         received_checksum = ntohs(received_checksum);
 
         // Zero out the checksum field in the buffer for calculation
-        buffer[8] = 0;
-        buffer[9] = 0;
+        buffer[12] = 0;
+        buffer[13] = 0;
 
         // Compute checksum over the received packet
         uint16_t computed_checksum = compute_checksum(buffer, num_bytes);
@@ -116,7 +121,10 @@ int main(int argc, char *argv[]) {
 
             // Set base sequence number to the next expected sequence number
             window.base_seq_num = packet.header.seq_num + 1;
+            window.last_ack_seq_num = packet.header.seq_num;
+            window.largest_ack_seq_num = packet.header.seq_num;
             printf("[update base_seq_num] base_seq_num: %u\n", window.base_seq_num);
+            printf("[initialize last_ack_seq_num] last_ack_seq_num: %u\n", window.last_ack_seq_num);
 
             // Send ACK for the start packet
             Packet ack_packet = {0};
@@ -147,84 +155,71 @@ int main(int argc, char *argv[]) {
             printf("[debug] base_seq_num: %u, seq_num: %u, index: %d\n",
                    window.base_seq_num, seq_num, index);
 
-            // Send ACK for the received packet
+            // Send ACK
+            // for the last consecutive packet received
+
+            // Decide what ack to be sent
+            // If we received all consecutive seq_num before the current one, that means:
+            // 1. the current one is the "append" packet, send the ack and update the last ack seqnum
+            // 2. the seqnum is one of the missing ones in window[base_seq_num: largest_ack_seq_num], a "fill-gap" packet, send with sack
+            // note: when sack == ack, it means it is a "append" packet, and sack can be considered invalid
+            int ack_num;
+            int sack_num;
+            if (seq_num == window.last_ack_seq_num + 1) {
+                if (seq_num == window.largest_ack_seq_num + 1) {
+                    window.last_ack_seq_num = seq_num;
+
+                    ack_num = seq_num + 1;
+                    sack_num = ack_num;
+                }
+                else {
+                    uint32_t i = seq_num + 1;
+                    // search for an index where the missing ends or until the largest_index
+                    while (i <= window.largest_ack_seq_num && window.packets[i % WINDOW_SIZE] != NULL) {
+                        i++;
+                    }
+
+                    ack_num = window.packets[(i-1) % WINDOW_SIZE]->header.seq_num + 1;
+                    sack_num = i;
+                }
+                
+            }
+            // otherwise, some packets are missing in between, send the last ack seqnum
+            else {
+                uint32_t i = window.last_ack_seq_num + 1;
+                // search for an index where the missing ends or until the largest_index
+                while (i <= window.largest_ack_seq_num && window.packets[i % WINDOW_SIZE] != NULL) {
+                    i++;
+                }
+
+                ack_num = window.last_ack_seq_num + 1;
+                sack_num = i;
+            }
+
+            // send the ack
             Packet ack_packet = {0};
             ack_packet.header.type = PACKET_TYPE_ACK;
-            ack_packet.header.ack_num = seq_num + 1;
-            
+            ack_packet.header.ack_num = ack_num;
+            ack_packet.header.sack_num = sack_num;
+            ack_packet.header.retrans = packet.header.retrans;
 
-            // Serialize and compute checksum
             uint8_t ack_buffer[HEADER_SIZE];
             serialize_packet(&ack_packet, ack_buffer);
 
             sendto(sockfd, ack_buffer, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, addr_len);
             printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
+            if (ack_packet.header.sack_num != ack_packet.header.ack_num)
+                printf("[send sack] Sack Num: %u\n", ack_packet.header.sack_num);
 
             // Check if the packet is within the window
             if (seq_num >= window.base_seq_num && seq_num < window.base_seq_num + WINDOW_SIZE) {
                 // Store the packet if it hasn't been received before
                 if (window.packets[index] == NULL) {
                     // update the largest seq_num of the window where there is a packet received
-                    window.largest_seq_num = seq_num > window.largest_seq_num ? seq_num : window.largest_seq_num;
+                    window.largest_ack_seq_num = seq_num > window.largest_ack_seq_num ? seq_num : window.largest_ack_seq_num;
                     // Store the packet
                     window.packets[index] = malloc(sizeof(Packet));
                     memcpy(window.packets[index], &packet, sizeof(Packet));
-
-                    // Send ACK
-                    // for the last consecutive packet received
-
-                    // Decide what ack to be sent
-                    // If we received all consecutive seq_num before the current one, that means:
-                    // 1. the current one is the last one, send the ack and update the last ack seqnum
-                    // 2. the seqnum is one of the missing ones in window[base_seq_num: largest_seq_num], send with sack
-                    // note: when sack == ack, it means sack is invalid and all packets are received
-                    int ack_num;
-                    int sack_num;
-                    if (seq_num == window.last_ack_seq_num + 1) {
-                        if (window.largest_seq_num == seq_num) {
-                            window.last_ack_seq_num = seq_num;
-
-                            ack_num = seq_num + 1;
-                            sack_num = ack_num;
-                        }
-                        else {
-                            uint32_t i = seq_num + 1;
-                            // search for an index where the missing ends or until the largest_index
-                            while (i <= window.largest_seq_num && window.packets[i % WINDOW_SIZE] != NULL) {
-                                i++;
-                            }
-
-                            ack_num = window.packets[(i-1) % WINDOW_SIZE]->header.seq_num + 1;
-                            sack_num = i;
-                        }
-                        
-                    }
-                    // otherwise, some packets are missing in between, send the last ack seqnum
-                    else {
-                        uint32_t i = window.last_ack_seq_num + 1;
-                        // search for an index where the missing ends or until the largest_index
-                        while (i <= window.largest_seq_num && window.packets[i % WINDOW_SIZE] != NULL) {
-                            i++;
-                        }
-
-                        ack_num = window.last_ack_seq_num + 1;
-                        sack_num = i;
-                    }
-
-                    // send the ack
-                    Packet ack_packet;
-                    memset(&ack_packet, 0, sizeof(ack_packet));
-                    ack_packet.header.type = PACKET_TYPE_ACK;
-                    ack_packet.header.ack_num = ack_num;
-                    ack_packet.header.sack_num = sack_num;
-                    ack_packet.header.retrans = packet.header.retrans;
-
-                    serialize_packet(&ack_packet, buffer);
-                    sendto(sockfd, buffer, HEADER_SIZE, 0,
-                        (struct sockaddr *)&sender_addr, addr_len);
-                    printf("[send ack] Ack Num: %u\n", ack_packet.header.ack_num);
-                    if (ack_packet.header.sack_num != ack_packet.header.ack_num)
-                        printf("[send sack] Sack Num: %u\n", ack_packet.header.sack_num);
                 }
 
                 // Deliver all in-order packets
